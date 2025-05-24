@@ -15,7 +15,11 @@ import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Map;
 import java.util.Scanner;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pfa.AI.AIController;
 import javafx.application.Application;
 import javafx.geometry.Insets;
@@ -42,6 +46,7 @@ import javafx.animation.KeyValue;
 import javafx.util.Duration;
 
 public class App extends Application {
+    static boolean isOnline = false;
     private Stage primaryStage;
     private Stage connectionStage;
     private BorderPane gamePanel;
@@ -301,10 +306,22 @@ public class App extends Application {
     }
 
     private void startPVPGame(String playerName) {
-        setupGameScreen(playerName, "Player 2");
+        setupGameScreen(playerName, "Player 2", false);
         board.reset();
         board.setAIController(null);
         updateTurnIndicator(null);
+    }
+
+    private void startOnlineGame(String matchId, String username, String opponentName, String whiteName) {
+        if (username.compareTo(whiteName) == 0) {
+            setupGameScreen(username, opponentName, true);
+        } else {
+            setupGameScreen(opponentName, username, true);
+        }
+        board.reset();
+        board.setAIController(null);
+        updateTurnIndicator(null);
+        ArrayList<String> moves = board.movesList;
     }
 
     private void checkConnection() {
@@ -313,28 +330,29 @@ public class App extends Application {
 
         VBox credentialsPanel = new VBox(20);
         credentialsPanel.setAlignment(Pos.CENTER);
-        credentialsPanel.setPadding(new Insets(100, 0, 100, 0));
+        credentialsPanel.setPadding(new Insets(100, 150, 100, 150));
         credentialsPanel.setStyle("-fx-background-color: #282828;");
         credentialsPanel.setOpacity(1);
 
         TextField loginField = new TextField("login");
         loginField.setFont(Font.font("Arial", 18));
-        loginField.setPrefWidth(200);
+        loginField.setPrefWidth(100);
         credentialsPanel.getChildren().add(loginField);
 
         TextField passwordField = new TextField("password");
         passwordField.setFont(Font.font("Arial", 18));
-        passwordField.setPrefWidth(200);
+        passwordField.setPrefWidth(100);
         credentialsPanel.getChildren().add(passwordField);
 
         Label connectionLabel = new Label("");
         connectionLabel.setFont(Font.font("Arial", 18));
         connectionLabel.setTextFill(Color.rgb(20, 20, 255));
-        connectionLabel.setPrefWidth(200);
+        connectionLabel.setPrefWidth(400);
         credentialsPanel.getChildren().add(connectionLabel);
 
         Button loginButton = new Button("Login");
         loginButton.setFont(Font.font("Arial", FontWeight.BOLD, 18));
+        loginButton.setPrefWidth(200);
         addButtonAnimation(loginButton);
         loginButton.setOnAction(e -> {
             try {
@@ -348,8 +366,16 @@ public class App extends Application {
         Button signupButton = new Button("signup");
         signupButton.setFont(Font.font("Arial", FontWeight.BOLD, 18));
         addButtonAnimation(signupButton);
+        signupButton.setPrefWidth(200);
         signupButton.setOnAction(e -> signupAction(""));
         credentialsPanel.getChildren().add(signupButton);
+
+        Button mainButton = new Button("Main Menu");
+        mainButton.setFont(Font.font("Arial", FontWeight.BOLD, 18));
+        addButtonAnimation(mainButton);
+        mainButton.setPrefWidth(200);
+        mainButton.setOnAction(e -> showMainMenu());
+        credentialsPanel.getChildren().add(mainButton);
 
         root.setCenter(credentialsPanel);
         Scene scene = new Scene(root, 1000, 800);
@@ -360,12 +386,107 @@ public class App extends Application {
         this.isConnected = isConnected;
     }
 
+    public void loginAction(String loginId, Integer elo) {
+        BorderPane root = new BorderPane();
+        root.setPadding(new Insets(100, 150, 100, 150));
+
+        VBox accountPanel = new VBox(20);
+        accountPanel.setAlignment(Pos.CENTER);
+        accountPanel.setPadding(new Insets(100, 150, 100, 150));
+        accountPanel.setStyle("-fx-background-color: #440044;");
+        accountPanel.setOpacity(1);
+
+        Label userLabel = new Label("logged in as " + loginId + " !");
+        userLabel.setFont(Font.font("Arial", 24));
+        userLabel.setAlignment(Pos.CENTER);
+        userLabel.setTextFill(Color.rgb(20, 20, 255));
+        userLabel.setPrefWidth(400);
+        accountPanel.getChildren().add(userLabel);
+
+        Label eloLabel = new Label("Elo : " + elo);
+        eloLabel.setFont(Font.font("Arial", 20));
+        eloLabel.setAlignment(Pos.CENTER);
+        eloLabel.setTextFill(Color.rgb(255, 255, 255));
+        eloLabel.setPrefWidth(400);
+        accountPanel.getChildren().add(eloLabel);
+
+        Label queueLabel = new Label("");
+        queueLabel.setFont(Font.font("Arial", 18));
+        queueLabel.setAlignment(Pos.CENTER);
+        queueLabel.setTextFill(Color.rgb(20, 20, 255));
+        queueLabel.setPrefWidth(400);
+        accountPanel.getChildren().add(queueLabel);
+
+        Button queueButton = new Button("Queue up!");
+        queueButton.setFont(Font.font("Arial", FontWeight.BOLD, 18));
+        addButtonAnimation(queueButton);
+        queueButton.setOnAction(e -> {
+            try {
+                queueUp(loginId);
+                queueLabel.setText("in queue...");
+                waitForMatch(loginId);
+            } catch (Exception ex) {
+                queueLabel.setText("error while queuing up!");
+            }
+        });
+        accountPanel.getChildren().add(queueButton);
+
+        root.setCenter(accountPanel);
+        Scene scene = new Scene(root, 1000, 800);
+        scene.setFill(Color.rgb(0, 0, 0));
+        primaryStage.setScene(scene);
+    }
+
+    public void queueUp(String loginId) throws Exception {
+        HttpClient httpclient = HttpClients.createDefault();
+        final String myjson = "{\"loginId\":\"" + loginId + "\"}";
+        HttpPost queue = new HttpPost("http://localhost:8080/queueup");
+        StringEntity queueEntity = new StringEntity(myjson, ContentType.APPLICATION_JSON);
+        queue.setEntity(queueEntity);
+        queue.setHeader("Accept", "application/json");
+        queue.setHeader("Content-type", "application/json");
+        HttpResponse queueResponse = httpclient.execute(queue);
+    }
+
+    public void waitForMatch(String loginId) throws Exception {
+        HttpClient httpclient = HttpClients.createDefault();
+        final String myjson = "{\"loginId\":\"" + loginId + "\"}";
+        HttpPost match = new HttpPost("http://localhost:8080/check-match");
+        StringEntity matchEntity = new StringEntity(myjson, ContentType.APPLICATION_JSON);
+        match.setEntity(matchEntity);
+        match.setHeader("Accept", "application/json");
+        match.setHeader("Content-type", "application/json");
+        while (true) {
+            HttpResponse matchResponse = httpclient.execute(match);
+            HttpEntity matchResponseEntity = matchResponse.getEntity();
+            if (matchResponseEntity != null) {
+                try (InputStream instream = matchResponseEntity.getContent()) {
+                    Scanner sc = new Scanner(instream);
+                    String json = sc.nextLine();
+                    ObjectMapper mapper = new ObjectMapper();
+                    Map<?, ?> map = mapper.readValue(json, Map.class);
+                    String id = (String) map.get("matchId");
+                    String whiteName = (String) map.get("whiteName");
+                    String opponentName = (String) map.get("opponentName");
+                    if (id.compareTo("-1") != 0) {
+                        startOnlineGame(id, loginId, opponentName, whiteName);
+                        break;
+                    }
+                } catch (Exception e) {
+                    System.out.println("No reponse from Server!");
+                }
+            }
+            wait(3000);
+
+        }
+    }
+
     public void signupAction(String labelStatus) {
         BorderPane root = new BorderPane();
 
         VBox credentialsPanel = new VBox(20);
         credentialsPanel.setAlignment(Pos.CENTER);
-        credentialsPanel.setPadding(new Insets(100, 0, 100, 0));
+        credentialsPanel.setPadding(new Insets(100, 150, 100, 150));
         credentialsPanel.setStyle("-fx-background-color: #282828;");
         credentialsPanel.setOpacity(1);
 
@@ -404,10 +525,15 @@ public class App extends Application {
         connectionLabel.setPrefWidth(400);
         credentialsPanel.getChildren().add(connectionLabel);
 
+        Button mainButton = new Button("Main Menu");
+        mainButton.setFont(Font.font("Arial", FontWeight.BOLD, 18));
+        addButtonAnimation(mainButton);
+        mainButton.setOnAction(e -> showMainMenu());
+        credentialsPanel.getChildren().add(mainButton);
+
         root.setCenter(credentialsPanel);
         Scene scene = new Scene(root, 1000, 800);
         primaryStage.setScene(scene);
-
     }
 
     public void signupRequest(String loginId, String password, String username) throws Exception {
@@ -430,14 +556,14 @@ public class App extends Application {
                     checkConnection();
                 }
             } catch (Exception e) {
-                System.out.println("No reponse from Server when trying to log in!");
+                System.out.println("No reponse from Server when trying to sign up!");
             }
         }
         setConnected(true);
 
     }
 
-    public void authenticate(String loginId, String password, Label status) throws IOException {
+    public void authenticate(String loginId, String password, Label status) throws Exception {
         HttpClient httpclient = HttpClients.createDefault();
         final String myjson = "{\"loginId\":\"" + loginId + "\",\"password\":\"" + password + "\"}";
         HttpPost login = new HttpPost("http://localhost:8080/login");
@@ -450,12 +576,15 @@ public class App extends Application {
         if (loginResponseEntity != null) {
             try (InputStream instream = loginResponseEntity.getContent()) {
                 Scanner sclogin = new Scanner(instream);
-                status.setText(sclogin.nextLine());
-                if (sclogin.nextLine().compareTo("successfully authenticated as " + loginId + "!") == 0) {
-                    setConnected(true);
-                    // new scene for matchmaking
+                String json = sclogin.nextLine();
+                ObjectMapper mapper = new ObjectMapper();
+                Map<?, ?> map = mapper.readValue(json, Map.class);
+                status.setText((String) map.get("response"));
+                if (status.getText().compareTo("successfully authenticated as " + loginId + "!") == 0) {
+                    // setConnected(true);
+                    System.out.println("logged in!");
+                    loginAction(loginId, (Integer) map.get("Elo"));
                 }
-
             } catch (Exception e) {
                 System.out.println("No reponse from Server when trying to log in!");
             }
@@ -464,7 +593,7 @@ public class App extends Application {
 
     private void startComputerGame(boolean playAsWhite, int difficulty, String playerName) {
         String opponentName = "Computer";
-        setupGameScreen(playAsWhite ? playerName : opponentName, playAsWhite ? opponentName : playerName);
+        setupGameScreen(playAsWhite ? playerName : opponentName, playAsWhite ? opponentName : playerName, false);
         board.reset();
 
         AIController aiController = new AIController(board, !playAsWhite, difficulty);
@@ -483,7 +612,7 @@ public class App extends Application {
         }
     }
 
-    private void setupGameScreen(String whiteName, String blackName) {
+    private void setupGameScreen(String whiteName, String blackName, boolean isOnline) {
         BorderPane root = new BorderPane();
         root.setStyle("-fx-background-color: #000000;");
 
@@ -494,7 +623,7 @@ public class App extends Application {
         this.opponentName = (blackName == null || blackName.trim().isEmpty()) ? "Player 2" : blackName;
 
         if (board == null) {
-            board = new Board();
+            board = new Board(isOnline);
         }
 
         StackPane boardWrapper = new StackPane();

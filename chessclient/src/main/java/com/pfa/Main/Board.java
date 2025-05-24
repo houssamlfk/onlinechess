@@ -1,5 +1,6 @@
 package com.pfa.Main;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pfa.AI.AIController;
 import com.pfa.Pieces.*;
 import javafx.animation.PauseTransition;
@@ -10,9 +11,21 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.util.Duration;
 
+import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Scanner;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.ContentType;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.HttpClients;
 
 public class Board extends StackPane {
     public int tileSize = 85;
@@ -20,9 +33,12 @@ public class Board extends StackPane {
     public int rows = 8;
     public ArrayList<Pieces> pieceList = new ArrayList<>();
 
+    public ArrayList<String> movesList = new ArrayList<>();
     public Pieces SelectedPiece;
 
     private Canvas boardCanvas;
+    private boolean isOnline;
+    private String matchId;
     private GraphicsContext gc;
     private AIController aiController;
     private boolean aiMoveInProgress = false;
@@ -34,7 +50,7 @@ public class Board extends StackPane {
 
     public CheckScanner checkScanner = new CheckScanner(this);
 
-    public Board() {
+    public Board(boolean isOnline, String matchId) {
         // Set up the board size with fixed dimensions
         int boardWidth = cols * tileSize;
         int boardHeight = rows * tileSize;
@@ -60,6 +76,8 @@ public class Board extends StackPane {
 
         // Initial draw
         draw();
+        this.isOnline = isOnline;
+        this.matchId = matchId;
     }
 
     public void setOnMoveExecuted(Consumer<String> action) {
@@ -84,6 +102,11 @@ public class Board extends StackPane {
     }
 
     public void MakeMove(Move move) {
+        String who = (isWhitetoMove) ? "white" : "black";
+        if (isOnline) {
+            sendMove(who, move, move.capture, matchId);
+        }
+
         if (move.piece.name.equals("Pawn")) {
             movePawn(move);
         } else if (move.piece.name.equals("King")) {
@@ -134,6 +157,54 @@ public class Board extends StackPane {
                 aiMoveInProgress = false;
             });
             pause.play();
+        }
+    }
+
+    public void sendMove(String mover, Move move, boolean capture, String matchId) throws Exception {
+        // parser
+        HashMap<Integer, String> columnMapper = new HashMap<Integer, String>();
+        HashMap<String, String> pieceMapper = new HashMap<String, String>();
+
+        pieceMapper.put("Bishop", "B");
+        pieceMapper.put("King", "K");
+        pieceMapper.put("Knight", "N");
+        pieceMapper.put("Rook", "R");
+        pieceMapper.put("Queen", "Q");
+        pieceMapper.put("Pawn", "");
+
+        columnMapper.put(0, "a");
+        columnMapper.put(1, "b");
+        columnMapper.put(2, "c");
+        columnMapper.put(3, "d");
+        columnMapper.put(4, "e");
+        columnMapper.put(5, "f");
+        columnMapper.put(6, "g");
+        columnMapper.put(7, "h");
+
+        String captureMarker = (capture) ? "x" : "";
+        String translatedMove = pieceMapper.get(move.piece.name) + captureMarker + columnMapper.get(move.newcol)
+                + move.newrow;
+        // online part
+        HttpClient httpclient = HttpClients.createDefault();
+        final String myjson = "{\"mover\":\"" + mover + "\",\"move\":\"" + translatedMove + "\"}";
+        HttpPost login = new HttpPost("http://localhost:8080/" + matchId);
+        StringEntity loginEntity = new StringEntity(myjson, ContentType.APPLICATION_JSON);
+        login.setEntity(loginEntity);
+        login.setHeader("Accept", "application/json");
+        login.setHeader("Content-type", "application/json");
+        HttpResponse loginResponse = httpclient.execute(login);
+        HttpEntity loginResponseEntity = loginResponse.getEntity();
+        if (loginResponseEntity != null) {
+            try (InputStream instream = loginResponseEntity.getContent()) {
+                Scanner sc = new Scanner(instream);
+                String json = sc.nextLine();
+                ObjectMapper mapper = new ObjectMapper();
+                Map<?, ?> map = mapper.readValue(json, Map.class);
+                String response = (String) map.get("res");
+                System.out.println(response);
+            } catch (Exception e) {
+                System.out.println("No reponse from Server!");
+            }
         }
     }
 
@@ -281,7 +352,6 @@ public class Board extends StackPane {
             if (checkScanner.isKingChecked(new Move(this, king, king.col, king.row))) {
                 gameResult = isWhitetoMove ? "Black wins" : "White wins";
                 System.out.println(gameResult);
-                SoundPlayer.playSound("tab-tabi-tab.wav");
             } else {
                 gameResult = "Stalemate";
                 System.out.println(gameResult);
@@ -353,6 +423,7 @@ public class Board extends StackPane {
 
     public void reset() {
         pieceList.clear();
+        movesList.clear();
         addPieces();
         SelectedPiece = null;
         enPassantTile = -1;

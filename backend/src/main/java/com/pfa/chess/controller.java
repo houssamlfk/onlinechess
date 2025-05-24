@@ -5,29 +5,58 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 
 @RestController
 class Controller {
 	private final MatchesRepository matchRepo;
 	private final UsersRepository userRepo;
+	private final QueueRepository queueRepo;
 
-	public Controller(MatchesRepository matchRepo, UsersRepository userRepo) {
+	public Controller(MatchesRepository matchRepo, UsersRepository userRepo, QueueRepository queueRepo) {
 		this.matchRepo = matchRepo;
 		this.userRepo = userRepo;
+		this.queueRepo = queueRepo;
 	}
 
 	@PostMapping("/queue")
-	String queueup(@RequestBody Users user) {
-		// matchmaking algorithm TOBE implemented (it's not that simple)
-		return "";
+	String queueUp(@RequestBody String loginId) {
+		Users user = new Users();
+		user = userRepo.findByLoginId(loginId).get(0);
+		PlayerInQueue player = new PlayerInQueue();
+		player.setElo(user.getElo());
+		player.setUsername(user.getUsername());
+		queueRepo.save(player);
+		return "player is in queue...";
+	}
+
+	@PostMapping("/check-match")
+	Integer checkmatch(@RequestBody String loginId) {
+		Users user = new Users();
+		user = userRepo.findByLoginId(loginId).get(0);
+		Matches currentMatch = new Matches();
+		List<Matches> matchList = matchRepo.findByCurrentlyPlayed(true);
+		for (int i = 0; i < matchList.size(); i++) {
+			if (matchList.get(i).getWhiteUsername().compareTo(user.getUsername()) == 0
+					|| matchList.get(i).getBlackUsername().compareTo(user.getUsername()) == 0) {
+				return matchList.get(i).getId();
+			}
+		}
+		return -1;
 	}
 
 	@PostMapping("/match-result")
-	String matchResult(@RequestBody Matches match) {
+	UserToken matchResult(@RequestBody String matchId, String username) {
 		matchRepo.save(match);
 		return "";
+	}
+
+	@PostMapping("/{matchId}")
+	String moveSystem(@RequestBody moveToken move, @PathVariable("matchId") String matchId) {
+
 	}
 
 	@PostMapping("/signup")
@@ -50,17 +79,23 @@ class Controller {
 	}
 
 	@PostMapping("/login")
-	String authenticate(@RequestBody AuthToken token) {
+	UserToken authenticate(@RequestBody AuthToken token) {
+		UserToken tokenToSend = new UserToken();
 		List<Users> potentialUserList = userRepo.findByLoginId(token.getLoginId());
 		if (potentialUserList.size() == 0) {
-			return "User is not signed up !";
+			tokenToSend.setElo(0);
+			tokenToSend.setResponse("User is not signed up !");
+			return tokenToSend;
 		} else {
 			Users user = potentialUserList.get(0);
+			tokenToSend.setElo(user.getElo());
 			if (user.getPassword().compareTo(token.getPassword()) == 0) {
 				ChessApplication.loggedIn = true;
-				return "successfully authenticated as " + token.getLoginId() + "!";
+				tokenToSend.setResponse("successfully authenticated as " + token.getLoginId() + "!");
+				return tokenToSend;
 			} else {
-				return "Wrong Credentials!";
+				tokenToSend.setResponse("Wrong Credentials!");
+				return tokenToSend;
 			}
 		}
 

@@ -3,6 +3,7 @@ package com.pfa.chess;
 import java.util.List;
 
 import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
@@ -10,13 +11,15 @@ import jakarta.persistence.Table;
 @Table
 public class Matches {
 	@Id
+	@GeneratedValue
 	Integer id;
 	List<String> matchDescription;
-	Integer blackId;
-	Integer whiteId;
+	String blackUsername;
+	String whiteUsername;
 	String winner;
 	Integer whiteEloChange;
 	Integer blackEloChange;
+	boolean currentlyPlayed;
 
 	public Integer getId() {
 		return id;
@@ -26,16 +29,16 @@ public class Matches {
 		return matchDescription;
 	}
 
-	public Integer getBlackId() {
-		return blackId;
+	public String getBlackUsername() {
+		return blackUsername;
 	}
 
 	public String getWinner() {
 		return winner;
 	}
 
-	public Integer getWhiteId() {
-		return whiteId;
+	public String getWhiteUsername() {
+		return whiteUsername;
 	}
 
 	public Integer getWhiteEloChange() {
@@ -46,20 +49,28 @@ public class Matches {
 		return blackEloChange;
 	}
 
+	public boolean getCurrentlyPlayed() {
+		return currentlyPlayed;
+	}
+
+	public void setCurrentlyPlayed(boolean currentlyPlayed) {
+		this.currentlyPlayed = currentlyPlayed;
+	}
+
 	public void setMatchDescription(List<String> matchDescription) {
 		this.matchDescription = matchDescription;
 	}
 
-	public void setBlackId(Integer blackId) {
-		this.blackId = blackId;
+	public void setBlackUsername(String blackUsername) {
+		this.blackUsername = blackUsername;
 	}
 
 	public void setWinner(String winner) {
 		this.winner = winner;
 	}
 
-	public void setWhiteId(Integer whiteId) {
-		this.whiteId = whiteId;
+	public void setWhiteUsername(String whiteUsername) {
+		this.whiteUsername = whiteUsername;
 	}
 
 	public void setWhiteEloChange(Integer whiteEloChange) {
