@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pfa.AI.AIController;
 import com.pfa.Pieces.*;
 import javafx.animation.PauseTransition;
+import javafx.concurrent.Task;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.layout.Pane;
@@ -11,6 +12,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.util.Duration;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -22,6 +24,7 @@ import java.util.stream.Collectors;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
@@ -37,20 +40,23 @@ public class Board extends StackPane {
     public Pieces SelectedPiece;
 
     private Canvas boardCanvas;
-    private boolean isOnline;
-    private String matchId;
     private GraphicsContext gc;
     private AIController aiController;
     private boolean aiMoveInProgress = false;
     private Consumer<String> onMoveExecuted;
 
+    public String matchId;
+    public String onlineUsername;
+    public boolean isOnlineWhite;
+    public boolean isOnline;
     public int enPassantTile = -1;
     public boolean isGameOver = false;
     public boolean isWhitetoMove = true;
+    public boolean isWaiting;
 
     public CheckScanner checkScanner = new CheckScanner(this);
 
-    public Board(boolean isOnline, String matchId) {
+    public Board(boolean isOnline, String matchId, String playerName) {
         // Set up the board size with fixed dimensions
         int boardWidth = cols * tileSize;
         int boardHeight = rows * tileSize;
@@ -78,6 +84,7 @@ public class Board extends StackPane {
         draw();
         this.isOnline = isOnline;
         this.matchId = matchId;
+        this.onlineUsername = playerName;
     }
 
     public void setOnMoveExecuted(Consumer<String> action) {
@@ -101,11 +108,72 @@ public class Board extends StackPane {
         return this.aiController;
     }
 
-    public void MakeMove(Move move) {
-        String who = (isWhitetoMove) ? "white" : "black";
-        if (isOnline) {
-            sendMove(who, move, move.capture, matchId);
+    public Move parseMove(String textMove) {
+        Move move = new Move();
+        Map<Character, Integer> columnMapper = new HashMap<>();
+        columnMapper.put('a', 0);
+        columnMapper.put('b', 1);
+        columnMapper.put('c', 2);
+        columnMapper.put('d', 3);
+        columnMapper.put('e', 4);
+        columnMapper.put('f', 5);
+        columnMapper.put('g', 6);
+        columnMapper.put('h', 7);
+
+        char c = textMove.charAt(0);
+        if (c == 'O') {
+            move.piece = getPieces(4, 7);
+            move.oldrow = 7;
+            move.oldcol = 4;
+            if (textMove.length() > 3) {
+                move.longCastle = true;
+                move.newcol = 2;
+                move.newrow = 7;
+                return move;
+            } else {
+                move.shortCastle = true;
+                move.newcol = 6;
+                move.newrow = 7;
+                return move;
+            }
+        } else if (c == 'o') {
+            move.piece = getPieces(4, 0);
+            move.oldrow = 0;
+            move.oldcol = 4;
+            if (textMove.length() > 3) {
+                move.longCastle = true;
+                move.newcol = 2;
+                move.newrow = 0;
+                return move;
+            } else {
+                move.shortCastle = true;
+                move.newcol = 6;
+                move.newrow = 0;
+                return move;
+            }
+        } else {
+            int offset = 0;
+            int oldcol = columnMapper.get(textMove.charAt(0));
+            int oldrow = Character.getNumericValue(textMove.charAt(1));
+            System.out.println("(" + oldcol + ", " + oldrow + ")");
+            move.oldcol = oldcol;
+            move.oldrow = oldrow;
+            move.piece = this.getPieces(oldcol, oldrow);
+            if (textMove.charAt(2) == 'x') {
+                offset = 1;
+            }
+            int newcol = columnMapper.get(textMove.charAt(2 + offset));
+            int newrow = Character.getNumericValue(textMove.charAt(3 + offset));
+            move.newcol = newcol;
+            move.newrow = newrow;
+            System.out.println("(" + newcol + ", " + newrow + ")");
+            move.capture = this.getPieces(newcol, newrow);
+            return move;
         }
+    }
+
+    public void MakeMove(Move move) throws Exception {
+        String who = (isWhitetoMove) ? "white" : "black";
 
         if (move.piece.name.equals("Pawn")) {
             movePawn(move);
@@ -117,8 +185,8 @@ public class Board extends StackPane {
         move.piece.row = move.newrow;
         move.piece.xPos = move.newcol * tileSize;
         move.piece.yPos = move.newrow * tileSize;
+        System.out.println("the piece should move to : (" + move.piece.xPos + ", " + move.piece.yPos + ")");
         move.piece.isFirstMove = false;
-        SoundPlayer.playSound("move.wav");
         capture(move.capture);
 
         isWhitetoMove = !isWhitetoMove;
@@ -133,7 +201,17 @@ public class Board extends StackPane {
         if (onMoveExecuted != null) {
             onMoveExecuted.accept(null);
         }
-
+        // online mode
+        if (isOnline && !isWaiting) {
+            boolean isCapture = (move.capture == null) ? false : true;
+            sendMove(who, move, isCapture, matchId);
+            waitForMove();
+            return;
+        }
+        if (isOnline && isWaiting) {
+            isWaiting = false;
+            return;
+        }
         // Only trigger AI if it's active and the game isn't over
         if (aiController != null && aiController.isActive() && !isGameOver && !aiMoveInProgress) {
             // Don't immediately make an AI move - use a timer to add a small delay
@@ -165,13 +243,6 @@ public class Board extends StackPane {
         HashMap<Integer, String> columnMapper = new HashMap<Integer, String>();
         HashMap<String, String> pieceMapper = new HashMap<String, String>();
 
-        pieceMapper.put("Bishop", "B");
-        pieceMapper.put("King", "K");
-        pieceMapper.put("Knight", "N");
-        pieceMapper.put("Rook", "R");
-        pieceMapper.put("Queen", "Q");
-        pieceMapper.put("Pawn", "");
-
         columnMapper.put(0, "a");
         columnMapper.put(1, "b");
         columnMapper.put(2, "c");
@@ -180,41 +251,70 @@ public class Board extends StackPane {
         columnMapper.put(5, "f");
         columnMapper.put(6, "g");
         columnMapper.put(7, "h");
-
+        String translatedMove;
         String captureMarker = (capture) ? "x" : "";
-        String translatedMove = pieceMapper.get(move.piece.name) + captureMarker + columnMapper.get(move.newcol)
-                + move.newrow;
-        // online part
-        HttpClient httpclient = HttpClients.createDefault();
-        final String myjson = "{\"mover\":\"" + mover + "\",\"move\":\"" + translatedMove + "\"}";
-        HttpPost login = new HttpPost("http://localhost:8080/" + matchId);
-        StringEntity loginEntity = new StringEntity(myjson, ContentType.APPLICATION_JSON);
-        login.setEntity(loginEntity);
-        login.setHeader("Accept", "application/json");
-        login.setHeader("Content-type", "application/json");
-        HttpResponse loginResponse = httpclient.execute(login);
-        HttpEntity loginResponseEntity = loginResponse.getEntity();
-        if (loginResponseEntity != null) {
-            try (InputStream instream = loginResponseEntity.getContent()) {
-                Scanner sc = new Scanner(instream);
-                String json = sc.nextLine();
-                ObjectMapper mapper = new ObjectMapper();
-                Map<?, ?> map = mapper.readValue(json, Map.class);
-                String response = (String) map.get("res");
-                System.out.println(response);
-            } catch (Exception e) {
-                System.out.println("No reponse from Server!");
+        if (move.shortCastle || move.longCastle) {
+            if (move.shortCastle) {
+                if (move.piece.isWhite) {
+                    translatedMove = "O-O";
+                } else {
+                    translatedMove = "o-o";
+                }
+            } else {
+                if (move.piece.isWhite) {
+                    translatedMove = "O-O-O";
+                } else {
+                    translatedMove = "o-o-o";
+                }
             }
+        } else {
+            translatedMove = columnMapper.get(move.oldcol) + move.oldrow + captureMarker + columnMapper.get(move.newcol)
+                    + move.newrow;
         }
+        // online part
+        Task<Void> task = new Task<Void>() {
+            @Override
+            protected Void call() throws Exception {
+                HttpClient httpclient = HttpClients.createDefault();
+                String text = "nothing";
+                HttpPost moveRequest = new HttpPost(
+                        "http://localhost:8080/match/" + matchId + "/" + translatedMove + "/" + onlineUsername);
+                StringEntity moveEntity = new StringEntity(text, ContentType.TEXT_PLAIN);
+                moveRequest.setEntity(moveEntity);
+                HttpResponse moveResponse = httpclient.execute(moveRequest);
+                HttpEntity moveResponseEntity = moveResponse.getEntity();
+                if (moveResponseEntity != null) {
+                    try (InputStream instream = moveResponseEntity.getContent()) {
+                        Scanner sc = new Scanner(instream);
+                        String response = sc.nextLine();
+                        System.out.println("server response : " + response);
+                        sc.close();
+                    } catch (Exception e) {
+                        System.out.println("No response from Server when sending a move!");
+                        e.printStackTrace();
+                    }
+                }
+                return null;
+            }
+        };
+
+        task.setOnFailed(ex -> {
+            System.out.println("exception in task for sending move!");
+            task.getException().printStackTrace();
+        });
+
+        new Thread(task).start();
     }
 
     private void moveKing(Move move) {
         if (Math.abs(move.piece.col - move.newcol) == 2) {
             Pieces rook;
             if (move.piece.col < move.newcol) {
+                move.shortCastle = true;
                 rook = getPieces(7, move.piece.row);
                 rook.col = 5;
             } else {
+                move.longCastle = true;
                 rook = getPieces(0, move.piece.row);
                 rook.col = 3;
             }
@@ -247,6 +347,65 @@ public class Board extends StackPane {
 
     public void capture(Pieces piece) {
         pieceList.remove(piece);
+    }
+
+    public void waitForMove() throws Exception {
+        this.isWaiting = true;
+        if (!isGameOver) {
+            Task<Move> task = new Task<Move>() {
+                @Override
+                protected Move call() throws Exception {
+                    while (true) {
+                        String textMove = "x";
+                        textMove = checkMoved();
+                        if (!textMove.equals("x")) {
+                            Move nextMove = new Move();
+                            nextMove = parseMove(textMove);
+                            return nextMove;
+                        } else {
+                            Thread.sleep(2000);
+                        }
+                    }
+                }
+            };
+
+            task.setOnFailed(ex -> {
+                System.out.println("exception in task for checking next move !");
+                task.getException().printStackTrace();
+            });
+            task.setOnSucceeded(ex -> {
+                try {
+                    this.MakeMove(task.getValue());
+                } catch (Exception exception) {
+                    System.out.println("error when making next move from task");
+                    exception.printStackTrace();
+                }
+            });
+            new Thread(task).start();
+
+        }
+        return;
+    }
+
+    public String checkMoved() throws Exception {
+        HttpClient httpclient = HttpClients.createDefault();
+        HttpGet moveRequest = new HttpGet("http://localhost:8080/match/" + matchId + "/" + onlineUsername);
+        System.out.println("trying to reach server with: " + matchId + "," + onlineUsername);
+        HttpResponse moveResponse = httpclient.execute(moveRequest);
+        HttpEntity moveResponseEntity = moveResponse.getEntity();
+        if (moveResponseEntity != null) {
+            try (InputStream instream = moveResponseEntity.getContent()) {
+                Scanner sc = new Scanner(instream);
+                String response = sc.nextLine();
+                sc.close();
+                System.out.println("received from server move :" + response);
+                return response;
+            } catch (Exception e) {
+                System.out.println("No reponse from Server when checking for move!");
+                e.printStackTrace();
+            }
+        }
+        return "x";
     }
 
     public boolean isValidMove(Move move) {
@@ -329,7 +488,7 @@ public class Board extends StackPane {
         pieceList.add(new Pawn(this, 7, 6, true));
     }
 
-    private void updateGameState() {
+    private void updateGameState() throws Exception {
         Pieces king = findKing(isWhitetoMove);
         String gameResult = null;
 
@@ -337,8 +496,8 @@ public class Board extends StackPane {
             // King not found - likely captured, which shouldn't happen
             isGameOver = true;
             gameResult = isWhitetoMove ? "Black wins" : "White wins";
+
             System.out.println(gameResult);
-            SoundPlayer.playSound("tab-tabi-tab.wav");
 
             // Notify that a game result is available if callback is set
             if (onMoveExecuted != null) {
@@ -351,6 +510,25 @@ public class Board extends StackPane {
             isGameOver = true;
             if (checkScanner.isKingChecked(new Move(this, king, king.col, king.row))) {
                 gameResult = isWhitetoMove ? "Black wins" : "White wins";
+                if (isOnline) {
+                    String color = isWhitetoMove ? "Black" : "White";
+                    HttpClient httpclient = HttpClients.createDefault();
+                    HttpGet endRequest = new HttpGet("http://localhost:8080/match-result/" + matchId + "/" + color);
+                    HttpResponse endResponse = httpclient.execute(endRequest);
+                    HttpEntity endResponseEntity = endResponse.getEntity();
+                    if (endResponseEntity != null) {
+                        try (InputStream instream = endResponseEntity.getContent()) {
+                            Scanner sc = new Scanner(instream);
+                            String response = sc.nextLine();
+                            System.out.println(response);
+                            sc.close();
+                        } catch (Exception e) {
+                            System.out.println("No reponse from Server!");
+                            e.printStackTrace();
+                        }
+                    }
+                }
+
                 System.out.println(gameResult);
             } else {
                 gameResult = "Stalemate";

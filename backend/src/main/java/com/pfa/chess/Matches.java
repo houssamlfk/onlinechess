@@ -2,10 +2,13 @@ package com.pfa.chess;
 
 import java.util.List;
 
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
+import javafx.util.Pair;
 
 @Entity
 @Table
@@ -20,6 +23,7 @@ public class Matches {
 	Integer whiteEloChange;
 	Integer blackEloChange;
 	boolean currentlyPlayed;
+	Integer receiptStatus = 2;
 
 	public Integer getId() {
 		return id;
@@ -51,6 +55,14 @@ public class Matches {
 
 	public boolean getCurrentlyPlayed() {
 		return currentlyPlayed;
+	}
+
+	public Integer getReceiptStatus() {
+		return receiptStatus;
+	}
+
+	public void setReceiptStatus(Integer receiptStatus) {
+		this.receiptStatus = receiptStatus;
 	}
 
 	public void setCurrentlyPlayed(boolean currentlyPlayed) {

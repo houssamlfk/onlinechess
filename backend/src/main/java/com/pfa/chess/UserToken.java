@@ -4,14 +4,14 @@ import jakarta.persistence.Entity;
 
 public class UserToken {
 	String response;
-	Integer Elo;
+	Integer elo;
 
 	public String getResponse() {
 		return response;
 	}
 
 	public Integer getElo() {
-		return Elo;
+		return elo;
 	}
 
 	public void setResponse(String response) {
@@ -19,6 +19,6 @@ public class UserToken {
 	}
 
 	public void setElo(Integer elo) {
-		Elo = elo;
+		this.elo = elo;
 	}
 }

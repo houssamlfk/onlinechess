@@ -7,5 +7,7 @@ import java.util.List;
 @Repository
 public interface UsersRepository extends JpaRepository<Users, Integer> {
 
-	List<Users> findByLoginId(String loginId);
+	List<Users> findAllByLoginId(String loginId);
+
+	List<Users> findAllByUsername(String username);
 }

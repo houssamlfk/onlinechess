@@ -67,7 +67,15 @@ public class input {
                 Move move = new Move(board, board.SelectedPiece, col, row);
 
                 if (board.isValidMove(move)) {
-                    board.MakeMove(move);
+                    try {
+                        if (board.isOnline && !board.isWaiting) {
+                            board.MakeMove(move);
+                            return;
+                        }
+                        board.MakeMove(move);
+                    } catch (Exception ex) {
+                        System.out.println("an exception when trying to make a move!");
+                    }
                 } else {
                     returnPieceToOriginalPosition();
                     SoundPlayer.playSound("error.wav");
@@ -80,6 +88,7 @@ public class input {
 
             board.SelectedPiece = null;
         }
+
     }
 
     private void returnPieceToOriginalPosition() {

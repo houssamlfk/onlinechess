@@ -9,4 +9,6 @@ public interface MatchesRepository extends JpaRepository<Matches, Integer> {
 	public Matches findOneByWhiteUsername(String username);
 
 	public List<Matches> findByCurrentlyPlayed(boolean currentlyPlayed);
+
+	public Matches findOneById(Integer id);
 }

@@ -58,7 +58,11 @@ public class AIController {
 
         Move bestMove = findBestMove();
         if (bestMove != null) {
-            board.MakeMove(bestMove);
+            try {
+                board.MakeMove(bestMove);
+            } catch (Exception ex) {
+                System.out.println("exception when making a move!");
+            }
         }
     }
 

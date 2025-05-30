@@ -11,6 +11,8 @@ public class Move {
     public int newrow;
     public Pieces piece;
     public Pieces capture;
+    public boolean shortCastle = false;
+    public boolean longCastle = false;
 
     public Move(Board board, Pieces piece, int newcol, int newrow) {
         this.oldcol = piece.col;

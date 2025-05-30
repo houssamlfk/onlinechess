@@ -3,6 +3,7 @@ package com.pfa.Main;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
@@ -36,6 +37,7 @@ import javafx.scene.text.FontWeight;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.application.Platform;
+import javafx.concurrent.Task;
 import javafx.animation.PauseTransition;
 import javafx.animation.FadeTransition;
 import javafx.animation.ScaleTransition;
@@ -46,12 +48,12 @@ import javafx.animation.KeyValue;
 import javafx.util.Duration;
 
 public class App extends Application {
-    static boolean isOnline = false;
     private Stage primaryStage;
     private Stage connectionStage;
     private BorderPane gamePanel;
     private Board board;
     private HBox turnIndicatorPanel;
+    private String onlineUsername;
     private Label turnLabel;
     private String playerName = "Player";
     private String opponentName = "Player 2";
@@ -60,7 +62,7 @@ public class App extends Application {
     private Label eloLabel;
     private VBox playerInfoPanel;
     private boolean isConnected = false;
-
+    private String onlineloginId;
     // online client part
     // WebSocketClient client = new StandardWebSocketClient();
 
@@ -306,22 +308,39 @@ public class App extends Application {
     }
 
     private void startPVPGame(String playerName) {
-        setupGameScreen(playerName, "Player 2", false);
+        setupGameScreen(playerName, "Player 2", false, "", "", "");
         board.reset();
         board.setAIController(null);
         updateTurnIndicator(null);
     }
 
-    private void startOnlineGame(String matchId, String username, String opponentName, String whiteName) {
-        if (username.compareTo(whiteName) == 0) {
-            setupGameScreen(username, opponentName, true);
-        } else {
-            setupGameScreen(opponentName, username, true);
-        }
-        board.reset();
-        board.setAIController(null);
-        updateTurnIndicator(null);
-        ArrayList<String> moves = board.movesList;
+    private void startOnlineGame(String matchId, String username, String opponentName, String whiteName,
+            String playerElo, String opponentElo) {
+        this.playerName = username;
+        this.onlineUsername = username;
+        this.opponentName = opponentName;
+        Platform.runLater(() -> {
+            if (username.equals(whiteName)) {
+                setupGameScreen(username, opponentName, true, matchId, playerElo, opponentElo);
+                board.reset();
+                board.isWaiting = false;
+                board.setAIController(null);
+                board.isOnlineWhite = true;
+                updateTurnIndicatorOnline(null, username, opponentName);
+            } else {
+                setupGameScreen(opponentName, username, true, matchId, playerElo, opponentElo);
+                board.reset();
+                board.setAIController(null);
+                board.isOnlineWhite = false;
+                updateTurnIndicatorOnline(null, opponentName, username);
+                try {
+                    board.waitForMove();
+                } catch (Exception ex) {
+                    System.out.println("Exception found when trying to run wait for move for the first time !");
+                }
+            }
+            // ArrayList<String> moves = board.movesList;
+        });
     }
 
     private void checkConnection() {
@@ -386,7 +405,9 @@ public class App extends Application {
         this.isConnected = isConnected;
     }
 
-    public void loginAction(String loginId, Integer elo) {
+    public void loginAction(String loginId, String elo) {
+        onlineloginId = loginId;
+
         BorderPane root = new BorderPane();
         root.setPadding(new Insets(100, 150, 100, 150));
 
@@ -421,13 +442,35 @@ public class App extends Application {
         queueButton.setFont(Font.font("Arial", FontWeight.BOLD, 18));
         addButtonAnimation(queueButton);
         queueButton.setOnAction(e -> {
-            try {
-                queueUp(loginId);
-                queueLabel.setText("in queue...");
-                waitForMatch(loginId);
-            } catch (Exception ex) {
-                queueLabel.setText("error while queuing up!");
-            }
+            queueLabel.setText("in queue...");
+
+            Task<Void> task = new Task<>() {
+                @Override
+                protected Void call() throws Exception {
+                    queueUp(loginId);
+                    return null;
+                }
+            };
+
+            task.setOnFailed(ex -> {
+                queueLabel.setText("error when queuing up!");
+            });
+
+            task.setOnSucceeded(ex -> {
+                Task<Void> secondtask = new Task<>() {
+                    @Override
+                    protected Void call() throws Exception {
+                        waitForMatch(loginId);
+                        return null;
+                    }
+                };
+                secondtask.setOnFailed(exx -> {
+                    queueLabel.setText("error when trying to find a match!");
+                });
+
+                new Thread(secondtask).start();
+            });
+            new Thread(task).start();
         });
         accountPanel.getChildren().add(queueButton);
 
@@ -437,26 +480,30 @@ public class App extends Application {
         primaryStage.setScene(scene);
     }
 
-    public void queueUp(String loginId) throws Exception {
+    public void queueUp(String loginId) {
         HttpClient httpclient = HttpClients.createDefault();
         final String myjson = "{\"loginId\":\"" + loginId + "\"}";
-        HttpPost queue = new HttpPost("http://localhost:8080/queueup");
+        HttpPost queue = new HttpPost("http://localhost:8080/queue");
         StringEntity queueEntity = new StringEntity(myjson, ContentType.APPLICATION_JSON);
         queue.setEntity(queueEntity);
         queue.setHeader("Accept", "application/json");
         queue.setHeader("Content-type", "application/json");
-        HttpResponse queueResponse = httpclient.execute(queue);
+        try {
+            HttpResponse queueResponse = httpclient.execute(queue);
+        } catch (Exception ex) {
+            System.out.println("no response when queuing up!");
+        }
     }
 
     public void waitForMatch(String loginId) throws Exception {
         HttpClient httpclient = HttpClients.createDefault();
-        final String myjson = "{\"loginId\":\"" + loginId + "\"}";
-        HttpPost match = new HttpPost("http://localhost:8080/check-match");
-        StringEntity matchEntity = new StringEntity(myjson, ContentType.APPLICATION_JSON);
-        match.setEntity(matchEntity);
-        match.setHeader("Accept", "application/json");
-        match.setHeader("Content-type", "application/json");
         while (true) {
+            final String myjson = "{\"loginId\":\"" + loginId + "\"}";
+            HttpPost match = new HttpPost("http://localhost:8080/check-match");
+            StringEntity matchEntity = new StringEntity(myjson, ContentType.APPLICATION_JSON);
+            match.setEntity(matchEntity);
+            match.setHeader("Accept", "application/json");
+            match.setHeader("Content-type", "application/json");
             HttpResponse matchResponse = httpclient.execute(match);
             HttpEntity matchResponseEntity = matchResponse.getEntity();
             if (matchResponseEntity != null) {
@@ -468,16 +515,19 @@ public class App extends Application {
                     String id = (String) map.get("matchId");
                     String whiteName = (String) map.get("whiteName");
                     String opponentName = (String) map.get("opponentName");
+                    String username = (String) map.get("username");
+                    String playerElo = (String) map.get("playerElo");
+                    String opponentElo = (String) map.get("opponentElo");
+                    sc.close();
                     if (id.compareTo("-1") != 0) {
-                        startOnlineGame(id, loginId, opponentName, whiteName);
+                        startOnlineGame(id, username, opponentName, whiteName, playerElo, opponentElo);
                         break;
                     }
                 } catch (Exception e) {
-                    System.out.println("No reponse from Server!");
+                    System.out.println("No response when waiting for match!");
                 }
             }
-            wait(3000);
-
+            Thread.sleep(2000);
         }
     }
 
@@ -555,6 +605,7 @@ public class App extends Application {
                 } else {
                     checkConnection();
                 }
+                sc.close();
             } catch (Exception e) {
                 System.out.println("No reponse from Server when trying to sign up!");
             }
@@ -583,8 +634,9 @@ public class App extends Application {
                 if (status.getText().compareTo("successfully authenticated as " + loginId + "!") == 0) {
                     // setConnected(true);
                     System.out.println("logged in!");
-                    loginAction(loginId, (Integer) map.get("Elo"));
+                    loginAction(loginId, map.get("elo").toString());
                 }
+                sclogin.close();
             } catch (Exception e) {
                 System.out.println("No reponse from Server when trying to log in!");
             }
@@ -593,7 +645,8 @@ public class App extends Application {
 
     private void startComputerGame(boolean playAsWhite, int difficulty, String playerName) {
         String opponentName = "Computer";
-        setupGameScreen(playAsWhite ? playerName : opponentName, playAsWhite ? opponentName : playerName, false);
+        setupGameScreen(playAsWhite ? playerName : opponentName, playAsWhite ? opponentName : playerName, false, "", "",
+                "");
         board.reset();
 
         AIController aiController = new AIController(board, !playAsWhite, difficulty);
@@ -612,7 +665,10 @@ public class App extends Application {
         }
     }
 
-    private void setupGameScreen(String whiteName, String blackName, boolean isOnline) {
+    private void setupGameScreen(String whiteName, String blackName, boolean isOnline, String matchId,
+            String playerElo,
+            String opponentElo) {
+        System.out.println(matchId);
         BorderPane root = new BorderPane();
         root.setStyle("-fx-background-color: #000000;");
 
@@ -622,8 +678,10 @@ public class App extends Application {
         this.playerName = (whiteName == null || whiteName.trim().isEmpty()) ? "Player" : whiteName;
         this.opponentName = (blackName == null || blackName.trim().isEmpty()) ? "Player 2" : blackName;
 
-        if (board == null) {
-            board = new Board(isOnline);
+        if (board == null && !isOnline) {
+            board = new Board(isOnline, matchId, "");
+        } else if (board == null && isOnline) {
+            board = new Board(isOnline, matchId, this.onlineUsername);
         }
 
         StackPane boardWrapper = new StackPane();
@@ -634,10 +692,15 @@ public class App extends Application {
         boardWrapper.setPadding(new Insets(20));
 
         board.setOnMoveExecuted((gameResult) -> {
-            updateTurnIndicator(gameResult);
             if (gameResult != null) {
                 showGameOverDialog(gameResult);
             }
+            if (isOnline) {
+                updateTurnIndicatorOnline(gameResult, whiteName, blackName);
+            } else {
+                updateTurnIndicator(gameResult);
+            }
+
         });
 
         turnIndicatorPanel = new HBox();
@@ -662,12 +725,29 @@ public class App extends Application {
         eloPrefix.setFont(Font.font("Arial", FontWeight.BOLD, 18));
         eloPrefix.setTextFill(Color.WHITE);
 
-        eloLabel = new Label(String.valueOf(playerELO));
+        eloLabel = new Label((isOnline) ? playerElo : "0");
         eloLabel.setFont(Font.font("Arial", FontWeight.BOLD, 24));
         eloLabel.setTextFill(Color.GOLD);
 
         eloBox.getChildren().addAll(eloPrefix, eloLabel);
         leftPanel.getChildren().add(eloBox);
+
+        if (isOnline) {
+            HBox eloBoxO = new HBox(5);
+            eloBox.setAlignment(Pos.CENTER);
+            Label eloPrefixO = new Label("opponent ELO: ");
+            eloPrefixO.setFont(Font.font("Arial", FontWeight.BOLD, 18));
+            eloPrefixO.setMinWidth(100);
+            eloPrefixO.setTextFill(Color.WHITE);
+
+            Label eloLabelO = new Label(opponentElo);
+            eloLabelO.setFont(Font.font("Arial", FontWeight.BOLD, 24));
+            eloLabelO.setMinWidth(50);
+            eloLabelO.setTextFill(Color.GOLD);
+
+            eloBoxO.getChildren().addAll(eloPrefixO, eloLabelO);
+            leftPanel.getChildren().add(eloBoxO);
+        }
 
         Button backButton = new Button("Back to Menu");
         backButton.setFont(Font.font("Arial", FontWeight.BOLD, 16));
@@ -682,31 +762,32 @@ public class App extends Application {
         rightPanel.setPadding(new Insets(20));
         rightPanel.setStyle("-fx-background-color: #1E1E1E;");
         rightPanel.setPrefWidth(180);
+        if (!isOnline) {
+            Button resetButton = new Button("RESET");
+            resetButton.setFont(Font.font("Arial", FontWeight.BOLD, 20));
+            resetButton.setTextFill(Color.WHITE);
+            resetButton.setStyle("-fx-background-color: #B40000;");
+            resetButton.setPrefSize(160, 80);
+            addButtonAnimation(resetButton);
+            resetButton.setOnAction(e -> {
+                board.reset();
+                updateTurnIndicator(null);
 
-        Button resetButton = new Button("RESET");
-        resetButton.setFont(Font.font("Arial", FontWeight.BOLD, 20));
-        resetButton.setTextFill(Color.WHITE);
-        resetButton.setStyle("-fx-background-color: #B40000;");
-        resetButton.setPrefSize(160, 80);
-        addButtonAnimation(resetButton);
-        resetButton.setOnAction(e -> {
-            board.reset();
-            updateTurnIndicator(null);
+                if (board.getAIController() != null &&
+                        !board.getAIController().aiPlaysWhite &&
+                        board.isWhitetoMove) {
+                    PauseTransition pause = new PauseTransition(Duration.millis(500));
+                    pause.setOnFinished(event -> {
+                        board.getAIController().makeAIMove();
+                        updateTurnIndicator(null); // Update after AI's move
+                    });
+                    pause.play();
+                }
+            });
 
-            if (board.getAIController() != null &&
-                    !board.getAIController().aiPlaysWhite &&
-                    board.isWhitetoMove) {
-                PauseTransition pause = new PauseTransition(Duration.millis(500));
-                pause.setOnFinished(event -> {
-                    board.getAIController().makeAIMove();
-                    updateTurnIndicator(null); // Update after AI's move
-                });
-                pause.play();
-            }
-        });
+            rightPanel.getChildren().add(resetButton);
 
-        rightPanel.getChildren().add(resetButton);
-
+        }
         gamePanel.setTop(turnIndicatorPanel);
         gamePanel.setCenter(boardWrapper);
         gamePanel.setLeft(leftPanel);
@@ -740,8 +821,93 @@ public class App extends Application {
         });
     }
 
+    private void updateTurnIndicatorOnline(String gameResult, String whiteName, String blackName) {
+        Platform.runLater(() -> {
+            if (gameResult != null) {
+                turnIndicatorPanel.setStyle("-fx-background-color: #8B0000;"); // Dark red for game over
+                turnLabel.setText(gameResult);
+                turnLabel.setTextFill(Color.WHITE);
+            } else if (board.isWhitetoMove) {
+                turnIndicatorPanel.setStyle("-fx-background-color: #DCDCDC;");
+                if (board.isOnlineWhite) {
+                    turnLabel.setText("you" + " (White's Turn)");
+                } else {
+                    turnLabel.setText(whiteName + " (White's Turn)");
+                }
+                turnLabel.setTextFill(Color.rgb(50, 50, 50));
+            } else {
+                turnIndicatorPanel.setStyle("-fx-background-color: #323232;");
+                if (!board.isOnlineWhite) {
+                    turnLabel.setText("you" + " (Black's Turn)");
+                } else {
+                    turnLabel.setText(blackName + " (Black's Turn)");
+                }
+                turnLabel.setTextFill(Color.rgb(220, 220, 220));
+            }
+        });
+    }
+
     private void showGameOverDialog(String result) {
         Platform.runLater(() -> {
+            if (board.isOnline) {
+
+                Stage dialogStage = new Stage();
+                dialogStage.initModality(Modality.APPLICATION_MODAL);
+                dialogStage.initOwner(primaryStage);
+                dialogStage.setTitle("Game Over");
+
+                VBox dialogVbox = new VBox(20);
+                dialogVbox.setPadding(new Insets(20));
+                dialogVbox.setAlignment(Pos.CENTER);
+                dialogVbox.setStyle("-fx-background-color: #323232;");
+
+                Label resultLabel = new Label(result);
+                resultLabel.setFont(Font.font("Arial", FontWeight.BOLD, 24));
+                resultLabel.setTextFill(Color.WHITE);
+                resultLabel.setOpacity(0);
+
+                FadeTransition resultFade = new FadeTransition(Duration.millis(500), resultLabel);
+                resultFade.setFromValue(0.0);
+                resultFade.setToValue(1.0);
+                resultFade.play();
+
+                Button queueSceneButton = new Button("Back to online menu");
+                queueSceneButton.setFont(Font.font("Arial", FontWeight.BOLD, 16));
+                addButtonAnimation(queueSceneButton);
+                queueSceneButton.setOnAction(e -> {
+                    String elo = "";
+                    HttpClient httpclient = HttpClients.createDefault();
+                    HttpGet endRequest = new HttpGet("http://localhost:8080/elo/" + onlineUsername);
+                    try {
+                        HttpResponse endResponse = httpclient.execute(endRequest);
+                        HttpEntity endResponseEntity = endResponse.getEntity();
+                        if (endResponseEntity != null) {
+                            try (InputStream instream = endResponseEntity.getContent()) {
+                                Scanner sc = new Scanner(instream);
+                                elo = sc.nextLine();
+                                System.out.println("received elo from server : " + elo);
+                                sc.close();
+                            } catch (Exception ex) {
+                                System.out.println("No reponse from Server!");
+                                ex.printStackTrace();
+                            }
+                        }
+
+                    } catch (Exception ex2) {
+                        System.out.println("exception when sending request");
+                        ex2.printStackTrace();
+                    }
+                    loginAction(onlineloginId, elo);
+                    dialogStage.close();
+                });
+
+                dialogVbox.getChildren().add(queueSceneButton);
+
+                Scene dialogScene = new Scene(dialogVbox, 400, 200);
+                dialogStage.setScene(dialogScene);
+                dialogStage.show();
+                return;
+            }
             playerGamesPlayed++;
 
             Stage dialogStage = new Stage();
